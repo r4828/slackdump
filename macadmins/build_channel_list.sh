@@ -100,10 +100,12 @@ missed=0
 # the user pasted directly (useful for disambiguating repeated names).
 id_regex='^[CGD][A-Z0-9]+$'
 
-# `|| [[ -n "$raw" ]]` so a file missing its terminating newline still
-# has its last line processed. `read` returns 1 on EOF but has already
-# populated $raw with the partial line.
-while IFS= read -r raw || [[ -n "$raw" ]]; do
+# `|| [[ -n "${raw-}" ]]` so a file missing its terminating newline
+# still has its last line processed. `read` returns 1 on EOF but has
+# already populated $raw with the partial line. The `${raw-}` default
+# expansion keeps this safe under `set -u` when the file is empty and
+# `read` never assigns $raw at all.
+while IFS= read -r raw || [[ -n "${raw-}" ]]; do
   # strip inline comments and whitespace
   name="${raw%%#*}"
   name="${name//[[:space:]]/}"

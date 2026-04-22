@@ -264,11 +264,13 @@ def render_channel(
     # parent is not in the top-level set (deleted root, retention
     # boundary, thread_broadcast without its root) surface in a separate
     # orphan section at the end.
+    # MESSAGE.DATA is declared BLOB; some SQLite builds of json_extract
+    # reject or silently NULL on BLOB input, so cast to TEXT first.
     all_sql = """
         SELECT m.ID, m.TS, m.IS_PARENT, m.PARENT_ID, m.THREAD_TS, m.TXT,
-               json_extract(m.DATA, '$.user')     AS uid,
-               json_extract(m.DATA, '$.bot_id')   AS bot,
-               json_extract(m.DATA, '$.username') AS uname_override
+               json_extract(CAST(m.DATA AS TEXT), '$.user')     AS uid,
+               json_extract(CAST(m.DATA AS TEXT), '$.bot_id')   AS bot,
+               json_extract(CAST(m.DATA AS TEXT), '$.username') AS uname_override
         FROM MESSAGE m
         WHERE m.CHANNEL_ID = ?
           AND m.CHUNK_ID = (
