@@ -66,11 +66,33 @@ def parse_args() -> argparse.Namespace:
 
 
 def ts_to_iso(ts: str | None) -> str:
+    """Format a Slack timestamp as UTC ISO-8601.
+
+    Slack timestamps are strings like '1700000000.123456' — 16 significant
+    digits, which exceeds IEEE-754 double precision. Going through float()
+    would drop sub-microsecond precision and (for very large values) shift
+    the microsecond field itself. Parse the seconds and the fractional
+    part from the string directly so the output is byte-exact.
+    """
     if not ts:
         return ""
     try:
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
-    except (TypeError, ValueError):
+        ts_str = ts.strip()
+        if not ts_str:
+            return ""
+        seconds_str, dot, fraction_str = ts_str.partition(".")
+        seconds = int(seconds_str)
+        microseconds = 0
+        if dot:
+            if not fraction_str.isdigit():
+                return ts
+            microseconds = int(fraction_str[:6].ljust(6, "0"))
+        return (
+            datetime.fromtimestamp(seconds, tz=timezone.utc)
+            .replace(microsecond=microseconds)
+            .isoformat()
+        )
+    except (TypeError, ValueError, OverflowError):
         return ts
 
 
@@ -147,13 +169,16 @@ def resolve_mentions(text: str, users: dict[str, str]) -> str:
 
     def sub_channel(match: re.Match[str]) -> str:
         name = match.group(2) or match.group(1)
-        return "#" + name
+        return "#" + _escape_md(name)
 
     def sub_link(match: re.Match[str]) -> str:
         url, label = match.group(1), match.group(2)
+        # Wrap the URL in angle brackets so embedded parens can't close
+        # the Markdown link-destination group early (CommonMark's <...>
+        # destination form treats () as literal).
         if label:
-            return f"[{label}]({url})"
-        return url
+            return f"[{_escape_md(label)}](<{url}>)"
+        return f"<{url}>"
 
     text = MENTION_RE.sub(sub_user, text)
     text = CHANNEL_REF_RE.sub(sub_channel, text)
@@ -395,7 +420,13 @@ def main() -> int:
             "| --- | ---: |",
         ]
         for cname, stem, n in summary:
-            index_lines.append(f"| [#{cname}]({stem}.md) | {n} |")
+            # Escape the display text: cname can contain inline Markdown
+            # metacharacters, and an unescaped '|' would break the table
+            # row (Slack disallows '|' in names, but guard defensively).
+            safe_cname = _escape_md(cname).replace("|", "\\|")
+            index_lines.append(
+                f"| [#{safe_cname}]({stem}.md) | {n} |"
+            )
         (args.output / "_index.md").write_text(
             "\n".join(index_lines) + "\n", encoding="utf-8"
         )
