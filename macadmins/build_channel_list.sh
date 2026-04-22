@@ -30,17 +30,28 @@ command -v slackdump >/dev/null || { echo "slackdump is required on PATH" >&2; e
 command -v python3 >/dev/null || { echo "python3 is required (portable cache age check)" >&2; exit 1; }
 [[ -f "$names_file" ]] || { echo "Missing $names_file" >&2; exit 1; }
 
-# Refresh the channel cache if it's missing, empty, or older than 24
-# hours. Uses Python because `find -mmin` / `find -mtime` behave
-# differently across BSD (macOS) and GNU builds, and POSIX `find` does
-# not specify `-mmin` at all. Exit 0 = stale (re-fetch), 1 = fresh.
+# Refresh the channel cache if it's missing, empty, older than 24
+# hours, or has malformed / truncated JSON. Uses Python because
+# `find -mmin` / `find -mtime` behave differently across BSD (macOS)
+# and GNU builds, and POSIX `find` does not specify `-mmin` at all.
+# The JSON integrity check repairs caches left corrupt by an
+# interrupted `slackdump list channels` call (before the atomic
+# temp-file swap was added below).
+# Exit 0 = stale (re-fetch), 1 = fresh.
 cache_is_stale() {
   python3 - "$1" <<'PY'
-import os, sys, time
+import json, os, sys, time
 p = sys.argv[1]
-if not os.path.exists(p) or os.path.getsize(p) == 0:
-    sys.exit(0)
-if time.time() - os.path.getmtime(p) > 86400:
+try:
+    if not os.path.exists(p) or os.path.getsize(p) == 0:
+        sys.exit(0)
+    if time.time() - os.path.getmtime(p) > 86400:
+        sys.exit(0)
+    with open(p, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        sys.exit(0)
+except (OSError, ValueError):
     sys.exit(0)
 sys.exit(1)
 PY
@@ -48,9 +59,15 @@ PY
 
 if cache_is_stale "$cache"; then
   echo "Fetching channel list from workspace '${workspace}' (this can take a minute)..." >&2
+  # Write to a sibling temp path and rename on success so an aborted
+  # fetch doesn't leave truncated JSON at the canonical cache path.
+  cache_tmp="${cache}.new.$$"
+  trap 'rm -f "$cache_tmp"' EXIT
   # -y : auto-accept overwrite prompt (no TTY hang)
   # -q : don't also spew the JSON to stdout
-  slackdump list channels -workspace "$workspace" -y -q -format JSON -o "$cache"
+  slackdump list channels -workspace "$workspace" -y -q -format JSON -o "$cache_tmp"
+  mv "$cache_tmp" "$cache"
+  trap - EXIT
 fi
 
 # Write to a temp file and rename at the end so interrupted runs don't leave
