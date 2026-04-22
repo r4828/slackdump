@@ -251,20 +251,36 @@ def render_channel(
     count = 0
     for parent in con.execute(top_level_sql, (cid,)):
         parent_lines = _format_message(parent, users, "", min_chars)
-        if parent_lines is not None:
+        parent_rendered = parent_lines is not None
+        if parent_rendered:
             lines.extend(parent_lines)
             count += 1
-        # Query replies whenever the row is a thread lead (PARENT_ID = ID),
+        # Query replies whenever the row is a thread lead (PARENT_ID set),
         # including orphan leads. For standalone posts (PARENT_ID IS NULL)
         # there is nothing to look up and we skip the round trip.
-        if parent["PARENT_ID"] is not None:
-            pid = parent["ID"]
-            for reply in con.execute(replies_sql, (cid, pid, pid)):
-                reply_lines = _format_message(reply, users, "  ", min_chars)
-                if reply_lines is None:
-                    continue
-                lines.extend(reply_lines)
-                count += 1
+        if parent["PARENT_ID"] is None:
+            continue
+        pid = parent["ID"]
+        reply_lines_buf: list[str] = []
+        for reply in con.execute(replies_sql, (cid, pid, pid)):
+            formatted = _format_message(reply, users, "  ", min_chars)
+            if formatted is None:
+                continue
+            reply_lines_buf.extend(formatted)
+            count += 1
+        if not reply_lines_buf:
+            continue
+        if not parent_rendered:
+            # Parent was filtered (empty TXT or below --min-chars) but we
+            # have replies worth keeping. Emit a placeholder parent bullet
+            # so the indented replies have a valid list ancestor; without
+            # it some Markdown renderers treat the replies as orphaned
+            # code / continuation blocks.
+            when = ts_to_iso(parent["TS"])
+            lines.append(
+                f"- _parent message ({when}) has no displayable text_"
+            )
+        lines.extend(reply_lines_buf)
 
     # Orphan replies: rows whose PARENT_ID points at a message that does
     # not exist in this archive (deleted thread root, retention boundary,
