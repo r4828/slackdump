@@ -63,9 +63,17 @@ if cache_is_stale "$cache"; then
   # fetch doesn't leave truncated JSON at the canonical cache path.
   cache_tmp="${cache}.new.$$"
   trap 'rm -f "$cache_tmp"' EXIT
-  # -y : auto-accept overwrite prompt (no TTY hang)
-  # -q : don't also spew the JSON to stdout
-  slackdump list channels -workspace "$workspace" -y -q -format JSON -o "$cache_tmp"
+  # `slackdump list channels` has no -o flag (OmitOutputFlag stays set
+  # for this subcommand in cmd/slackdump/internal/list/common.go:38),
+  # and the positional [filename] from its usage string isn't wired up
+  # in runListChannels either. The portable way to capture the JSON at
+  # a specific path is:
+  #   -no-json : misleadingly named "nosave"; skips the auto-save to
+  #              CWD and leaves printing-to-stdout as the sole output
+  #   -format JSON : array of slack.Channel encoded via json.Encoder
+  #   -y : auto-accept any overwrite/confirm prompt (belt-and-braces)
+  # Informational logs go to stderr, so stdout carries only the JSON.
+  slackdump list channels -workspace "$workspace" -y -format JSON -no-json > "$cache_tmp"
   mv "$cache_tmp" "$cache"
   trap - EXIT
 fi
