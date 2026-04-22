@@ -19,6 +19,7 @@ import pathlib
 import re
 import sqlite3
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 
 
@@ -197,6 +198,7 @@ def render_channel(
     con: sqlite3.Connection,
     cid: str,
     cname: str,
+    stem: str,
     users: dict[str, str],
     out_dir: pathlib.Path,
     min_chars: int,
@@ -302,11 +304,30 @@ def render_channel(
         lines.append("")
         lines.extend(orphan_section)
 
-    safe_name = UNSAFE_FILENAME_RE.sub("_", cname) or "channel"
-    (out_dir / f"{safe_name}.md").write_text(
+    (out_dir / f"{stem}.md").write_text(
         "\n".join(lines), encoding="utf-8"
     )
     return count
+
+
+def _filename_stems(chans: list[tuple[str, str]]) -> dict[str, str]:
+    """Map each channel ID to a disambiguated filename stem.
+
+    Slack allows repeated channel names (archived-and-recreated, renames,
+    etc.). Naming every output file after the channel name alone would
+    let later channels clobber earlier ones at the same path and make
+    _index.md point multiple rows at one file. When a name collides we
+    suffix each colliding file with '--<channel-id>'; single-occurrence
+    names stay clean.
+    """
+    counts = Counter(name for _, name in chans)
+    stems: dict[str, str] = {}
+    for cid, cname in chans:
+        safe = UNSAFE_FILENAME_RE.sub("_", cname) or "channel"
+        if counts[cname] > 1:
+            safe = f"{safe}--{cid}"
+        stems[cid] = safe
+    return stems
 
 
 def main() -> int:
@@ -324,12 +345,14 @@ def main() -> int:
         if not chans:
             print("No matching channels in the archive.", file=sys.stderr)
             return 2
-        summary: list[tuple[str, int]] = []
+        stems = _filename_stems(chans)
+        summary: list[tuple[str, str, int]] = []
         for cid, cname in chans:
+            stem = stems[cid]
             n = render_channel(
-                con, cid, cname, users, args.output, args.min_chars
+                con, cid, cname, stem, users, args.output, args.min_chars
             )
-            summary.append((cname, n))
+            summary.append((cname, stem, n))
             print(f"  {cname:30s}  {n:>7d} messages")
         index_lines = [
             "# macadmins archive index",
@@ -339,13 +362,12 @@ def main() -> int:
             "| Channel | Messages |",
             "| --- | ---: |",
         ]
-        for cname, n in summary:
-            safe = UNSAFE_FILENAME_RE.sub("_", cname) or "channel"
-            index_lines.append(f"| [#{cname}]({safe}.md) | {n} |")
+        for cname, stem, n in summary:
+            index_lines.append(f"| [#{cname}]({stem}.md) | {n} |")
         (args.output / "_index.md").write_text(
             "\n".join(index_lines) + "\n", encoding="utf-8"
         )
-        total = sum(n for _, n in summary)
+        total = sum(n for _, _, n in summary)
         print(
             f"Wrote {len(summary)} channel file(s) + _index.md "
             f"to {args.output} ({total} messages total)"
