@@ -41,9 +41,13 @@ allowed), then:
 ./build_channel_list.sh
 ```
 
-This fetches the full channel listing once a day into `channels_all.json`
-and writes resolved URLs to `channels.txt`. If any names fail to resolve,
-they land in `missing.txt` and the script exits non-zero so you can fix them.
+This fetches the full channel listing once a day into
+`channels_all.<workspace>.json` (scoped by workspace so switching
+workspaces doesn't reuse a stale catalog) and writes resolved URLs
+to `channels.txt`. If any names fail to resolve or resolve ambiguously
+to multiple IDs, they land in `missing.txt` and the script exits
+non-zero so you can fix them. `channel_names.txt` also accepts raw
+channel IDs (e.g. `C01234ABCDE`) for disambiguating repeated names.
 
 ## Step 2 — archive
 
@@ -123,7 +127,7 @@ connector once your Onyx instance is running.
 
 - `archive/` — the SQLite archive and any downloaded binaries
 - `md/` — generated Markdown
-- `channels_all.json` — cached channel listing
+- `channels_all.<workspace>.json` — cached channel listing (one per workspace)
 - `channels.txt`, `missing.txt` — regenerated each run
 
 Only the scripts and `channel_names.txt` are version-controlled.

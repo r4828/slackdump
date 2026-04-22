@@ -28,6 +28,17 @@ CHANNEL_REF_RE = re.compile(r"<#([CGDW][A-Z0-9]+)(?:\|([^>]+))?>")
 LINK_RE = re.compile(r"<(https?://[^|>]+)(?:\|([^>]+))?>")
 UNSAFE_FILENAME_RE = re.compile(r"[^\w.-]+")
 
+# Inline Markdown metacharacters that can break rendering if they appear
+# verbatim in user-supplied text (Slack display names, etc.). Keeping
+# this narrow: we don't touch '#', '-', '+', '.', '!', or '|' which are
+# only meaningful at the start of a line or inside tables.
+_MD_INLINE_SPECIAL_RE = re.compile(r"([\\`*_{}\[\]()<>])")
+
+
+def _escape_md(text: str) -> str:
+    """Backslash-escape inline Markdown metacharacters in free-form text."""
+    return _MD_INLINE_SPECIAL_RE.sub(r"\\\1", text)
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
@@ -132,7 +143,7 @@ def load_channels(
 def resolve_mentions(text: str, users: dict[str, str]) -> str:
     def sub_user(match: re.Match[str]) -> str:
         uid = match.group(1)
-        return "@" + users.get(uid, uid)
+        return "@" + _escape_md(users.get(uid, uid))
 
     def sub_channel(match: re.Match[str]) -> str:
         name = match.group(2) or match.group(1)
@@ -180,7 +191,9 @@ def _format_message(
         return None
     when = ts_to_iso(row["TS"])
     uid = row["uid"] or row["bot"] or ""
-    who = users.get(uid) or row["uname_override"] or uid or "system"
+    who = _escape_md(
+        users.get(uid) or row["uname_override"] or uid or "system"
+    )
     body = rendered.replace("\n", f"\n{indent}  ")
     # Trailing separator carries the list-item indent + 2 spaces so the
     # blank keeps the current list item open in CommonMark. A truly
@@ -335,9 +348,28 @@ def main() -> int:
     if not args.db.exists():
         print(f"Database not found: {args.db}", file=sys.stderr)
         return 1
-    args.output.mkdir(parents=True, exist_ok=True)
+    try:
+        args.output.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        print(
+            f"Unable to create output directory {args.output}: {err}",
+            file=sys.stderr,
+        )
+        return 1
 
-    con = sqlite3.connect(args.db)
+    # Open the archive read-only: this script never writes to the DB,
+    # and mode=ro prevents SQLite from taking a write lock or creating
+    # journal files next to slackdump.sqlite (which could race with a
+    # concurrent slackdump mcp / slackdump view process).
+    db_uri = f"{args.db.resolve().as_uri()}?mode=ro"
+    try:
+        con = sqlite3.connect(db_uri, uri=True)
+    except sqlite3.OperationalError as err:
+        print(
+            f"Failed to open database read-only: {args.db} ({err})",
+            file=sys.stderr,
+        )
+        return 1
     con.row_factory = sqlite3.Row
     try:
         users = load_users(con)
