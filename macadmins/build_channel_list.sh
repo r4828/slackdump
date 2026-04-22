@@ -60,7 +60,12 @@ while IFS= read -r raw; do
   if [[ $(printf '%s\n' "$matches" | grep -c .) -gt 1 ]]; then
     echo "Warning: channel name '$name' matched multiple IDs; using $id" >&2
   fi
-  printf 'https://macadmins.slack.com/archives/%s  # %s\n' "$id" "$name" >> "$out_tmp"
+  # slackdump's @file reader only treats lines that START with '#' as
+  # comments (internal/structures/entity_list.go:227). Emit the channel
+  # name as a separate comment line above each URL so the file is
+  # human-readable without confusing the parser.
+  printf '# %s\n' "$name" >> "$out_tmp"
+  printf 'https://macadmins.slack.com/archives/%s\n' "$id" >> "$out_tmp"
   resolved=$((resolved + 1))
 done < "$names_file"
 
