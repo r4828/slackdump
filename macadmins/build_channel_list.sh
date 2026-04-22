@@ -27,13 +27,20 @@ command -v slackdump >/dev/null || { echo "slackdump is required on PATH" >&2; e
 [[ -f "$names_file" ]] || { echo "Missing $names_file" >&2; exit 1; }
 
 # Refresh the channel cache once a day.
+# -y   : auto-accept overwrite prompt (no TTY hang)
+# -q   : don't also spew the JSON to stdout
 if [[ ! -s "$cache" ]] || [[ -n "$(find "$cache" -mtime +1 -print 2>/dev/null)" ]]; then
   echo "Fetching channel list from workspace '${workspace}' (this can take a minute)..." >&2
-  slackdump list channels -workspace "$workspace" -format JSON -o "$cache"
+  slackdump list channels -workspace "$workspace" -y -q -format JSON -o "$cache"
 fi
 
-: > "$out"
-: > "$missing_file"
+# Write to a temp file and rename at the end so interrupted runs don't leave
+# a half-populated channels.txt on disk.
+out_tmp="${out}.tmp"
+missing_tmp="${missing_file}.tmp"
+trap 'rm -f "$out_tmp" "$missing_tmp"' EXIT
+: > "$out_tmp"
+: > "$missing_tmp"
 resolved=0
 missed=0
 
@@ -43,15 +50,23 @@ while IFS= read -r raw; do
   name="${name//[[:space:]]/}"
   [[ -z "$name" ]] && continue
 
-  id=$(jq -r --arg n "$name" '.[] | select(.name==$n) | .id' "$cache" | head -n1)
+  matches=$(jq -r --arg n "$name" '.[] | select(.name==$n) | .id' "$cache")
+  id=$(printf '%s\n' "$matches" | head -n1)
   if [[ -z "$id" ]]; then
-    echo "$name" >> "$missing_file"
+    echo "$name" >> "$missing_tmp"
     missed=$((missed + 1))
     continue
   fi
-  printf 'https://macadmins.slack.com/archives/%s  # %s\n' "$id" "$name" >> "$out"
+  if [[ $(printf '%s\n' "$matches" | grep -c .) -gt 1 ]]; then
+    echo "Warning: channel name '$name' matched multiple IDs; using $id" >&2
+  fi
+  printf 'https://macadmins.slack.com/archives/%s  # %s\n' "$id" "$name" >> "$out_tmp"
   resolved=$((resolved + 1))
 done < "$names_file"
+
+mv "$out_tmp" "$out"
+mv "$missing_tmp" "$missing_file"
+trap - EXIT
 
 echo "Resolved ${resolved} channel(s) -> $out" >&2
 if (( missed > 0 )); then

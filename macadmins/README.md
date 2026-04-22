@@ -25,8 +25,12 @@ slackdump workspace new macadmins    # pick "User Browser" when prompted
 slackdump workspace list             # verify it's cached
 ```
 
-Credentials are written to `~/.cache/slackdump/macadmins/` (Linux), encrypted
-against the machine ID.
+Credentials are written to the slackdump cache dir, encrypted against the
+machine ID:
+
+- Linux: `~/.cache/slackdump/macadmins/`
+- macOS: `~/Library/Caches/slackdump/macadmins/`
+- Windows: `%LOCALAPPDATA%\slackdump\macadmins\`
 
 ## Step 1 — resolve channel names to IDs
 

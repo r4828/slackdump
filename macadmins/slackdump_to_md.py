@@ -23,8 +23,9 @@ from datetime import datetime, timezone
 
 
 MENTION_RE = re.compile(r"<@([UW][A-Z0-9]+)>")
-CHANNEL_REF_RE = re.compile(r"<#([CG][A-Z0-9]+)(?:\|([^>]+))?>")
+CHANNEL_REF_RE = re.compile(r"<#([CGDW][A-Z0-9]+)(?:\|([^>]+))?>")
 LINK_RE = re.compile(r"<(https?://[^|>]+)(?:\|([^>]+))?>")
+UNSAFE_FILENAME_RE = re.compile(r"[^\w.-]+")
 
 
 def parse_args() -> argparse.Namespace:
@@ -162,7 +163,7 @@ def render_channel(
     count = 0
     for row in rows:
         text = (row["TXT"] or "").strip()
-        if len(text) < min_chars:
+        if not text or len(text) < min_chars:
             continue
         text = resolve_mentions(text, users)
         when = ts_to_iso(row["TS"])
@@ -180,7 +181,10 @@ def render_channel(
         lines.append(f"{indent}  {text}")
         lines.append("")
         count += 1
-    (out_dir / f"{cname}.md").write_text("\n".join(lines), encoding="utf-8")
+    safe_name = UNSAFE_FILENAME_RE.sub("_", cname) or "channel"
+    (out_dir / f"{safe_name}.md").write_text(
+        "\n".join(lines), encoding="utf-8"
+    )
     return count
 
 
@@ -215,7 +219,8 @@ def main() -> int:
             "| --- | ---: |",
         ]
         for cname, n in summary:
-            index_lines.append(f"| [#{cname}]({cname}.md) | {n} |")
+            safe = UNSAFE_FILENAME_RE.sub("_", cname) or "channel"
+            index_lines.append(f"| [#{cname}]({safe}.md) | {n} |")
         (args.output / "_index.md").write_text(
             "\n".join(index_lines) + "\n", encoding="utf-8"
         )
