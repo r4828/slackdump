@@ -181,10 +181,15 @@ def _format_message(
     uid = row["uid"] or row["bot"] or ""
     who = users.get(uid) or row["uname_override"] or uid or "system"
     body = rendered.replace("\n", f"\n{indent}  ")
+    # Trailing separator carries the list-item indent + 2 spaces so the
+    # blank keeps the current list item open in CommonMark. A truly
+    # unindented blank would terminate the item, and the next indented
+    # reply line ("  - ...") could then be re-parsed as a new top-level
+    # list (CommonMark allows up to 3 leading spaces on top-level items).
     return [
         f"{indent}- **{who}** ({when})",
         f"{indent}  {body}",
-        "",
+        f"{indent}  ",
     ]
 
 
@@ -196,49 +201,36 @@ def render_channel(
     out_dir: pathlib.Path,
     min_chars: int,
 ) -> int:
-    # MESSAGE has composite PK (ID, CHUNK_ID); the same logical message can
-    # exist in multiple chunks after resume / thread-fetch. Dedupe to the
-    # latest chunk per (CHANNEL_ID, ID) so we don't emit duplicates.
+    # Single query pulls every deduped message for the channel; we group
+    # in Python to avoid an N+1 roundtrip per thread parent.
+    #
+    # MESSAGE has composite PK (ID, CHUNK_ID); the same logical message
+    # can exist in multiple chunks after resume / thread-fetch, so we
+    # filter to MAX(CHUNK_ID) per (CHANNEL_ID, ID).
     #
     # slackdump stores thread parents with PARENT_ID set to their own
     # thread timestamp (see dbase/repository/dbmessage.go: NewDBMessage
     # populates ParentID whenever msg.ThreadTimestamp != ""). Two subtle
     # shapes fall out of that:
     #
-    # - Normal thread parent (has replies): IS_PARENT = 1, PARENT_ID = ID.
-    # - Orphan thread lead (no replies yet, or replies deleted):
-    #   IS_PARENT = 0 (structures.IsThreadStart excludes empty threads),
-    #   PARENT_ID = ID, LATEST_REPLY = '0000000000.000000'.
+    #   - Normal thread parent (has replies): IS_PARENT = 1, PARENT_ID = ID.
+    #   - Orphan thread lead (no replies yet, or replies deleted):
+    #     IS_PARENT = 0 (structures.IsThreadStart excludes empty threads),
+    #     PARENT_ID = ID, LATEST_REPLY = '0000000000.000000'.
     #
-    # Both are "top-level" from a reading perspective. Expressing that as
-    # IS_PARENT = 1 OR PARENT_ID IS NULL would drop the orphan case, so
-    # the filter is "PARENT_ID IS NULL OR PARENT_ID = ID". Replies are
-    # any row whose PARENT_ID points at the lead but whose own ID is not
-    # the lead's (which excludes the parent's self-reference).
-    top_level_sql = """
+    # Both count as "top-level" for rendering. The grouping logic below
+    # treats a row as top-level when PARENT_ID IS NULL OR PARENT_ID == ID,
+    # and as a reply otherwise (bucketed by PARENT_ID). Replies whose
+    # parent is not in the top-level set (deleted root, retention
+    # boundary, thread_broadcast without its root) surface in a separate
+    # orphan section at the end.
+    all_sql = """
         SELECT m.ID, m.TS, m.IS_PARENT, m.PARENT_ID, m.THREAD_TS, m.TXT,
                json_extract(m.DATA, '$.user')     AS uid,
                json_extract(m.DATA, '$.bot_id')   AS bot,
                json_extract(m.DATA, '$.username') AS uname_override
         FROM MESSAGE m
         WHERE m.CHANNEL_ID = ?
-          AND (m.PARENT_ID IS NULL OR m.PARENT_ID = m.ID)
-          AND m.CHUNK_ID = (
-              SELECT MAX(m2.CHUNK_ID)
-              FROM MESSAGE m2
-              WHERE m2.ID = m.ID AND m2.CHANNEL_ID = m.CHANNEL_ID
-          )
-        ORDER BY m.ID ASC
-    """
-    replies_sql = """
-        SELECT m.ID, m.TS, m.IS_PARENT, m.PARENT_ID, m.THREAD_TS, m.TXT,
-               json_extract(m.DATA, '$.user')     AS uid,
-               json_extract(m.DATA, '$.bot_id')   AS bot,
-               json_extract(m.DATA, '$.username') AS uname_override
-        FROM MESSAGE m
-        WHERE m.CHANNEL_ID = ?
-          AND m.PARENT_ID = ?
-          AND m.ID != ?
           AND m.CHUNK_ID = (
               SELECT MAX(m2.CHUNK_ID)
               FROM MESSAGE m2
@@ -247,22 +239,27 @@ def render_channel(
         ORDER BY m.ID ASC
     """
 
+    top_level_rows: list[sqlite3.Row] = []
+    replies_by_parent: dict[int, list[sqlite3.Row]] = {}
+    for row in con.execute(all_sql, (cid,)):
+        pid = row["PARENT_ID"]
+        rid = row["ID"]
+        if pid is None or pid == rid:
+            top_level_rows.append(row)
+        else:
+            replies_by_parent.setdefault(pid, []).append(row)
+
     lines: list[str] = [f"# #{cname}", ""]
     count = 0
-    for parent in con.execute(top_level_sql, (cid,)):
+    for parent in top_level_rows:
         parent_lines = _format_message(parent, users, "", min_chars)
         parent_rendered = parent_lines is not None
         if parent_rendered:
             lines.extend(parent_lines)
             count += 1
-        # Query replies whenever the row is a thread lead (PARENT_ID set),
-        # including orphan leads. For standalone posts (PARENT_ID IS NULL)
-        # there is nothing to look up and we skip the round trip.
-        if parent["PARENT_ID"] is None:
-            continue
-        pid = parent["ID"]
+        reply_rows = replies_by_parent.pop(parent["ID"], [])
         reply_lines_buf: list[str] = []
-        for reply in con.execute(replies_sql, (cid, pid, pid)):
+        for reply in reply_rows:
             formatted = _format_message(reply, users, "  ", min_chars)
             if formatted is None:
                 continue
@@ -282,30 +279,17 @@ def render_channel(
             )
         lines.extend(reply_lines_buf)
 
-    # Orphan replies: rows whose PARENT_ID points at a message that does
-    # not exist in this archive (deleted thread root, retention boundary,
-    # thread_broadcast without its root, etc.). Without this sweep they'd
-    # be silently dropped.
-    orphan_parents_sql = """
-        SELECT DISTINCT m.PARENT_ID AS pid
-        FROM MESSAGE m
-        WHERE m.CHANNEL_ID = ?
-          AND m.PARENT_ID IS NOT NULL
-          AND m.PARENT_ID != m.ID
-          AND NOT EXISTS (
-              SELECT 1 FROM MESSAGE p
-              WHERE p.CHANNEL_ID = m.CHANNEL_ID AND p.ID = m.PARENT_ID
-          )
-        ORDER BY m.PARENT_ID ASC
-    """
+    # Anything left in replies_by_parent has a PARENT_ID that does not
+    # map to a top-level row in this archive. Render those under their
+    # own heading so they aren't silently dropped.
     orphan_section: list[str] = []
-    for (orphan_pid,) in con.execute(orphan_parents_sql, (cid,)):
+    for orphan_pid in sorted(replies_by_parent):
         group: list[str] = []
-        for reply in con.execute(replies_sql, (cid, orphan_pid, orphan_pid)):
-            reply_lines = _format_message(reply, users, "  ", min_chars)
-            if reply_lines is None:
+        for reply in replies_by_parent[orphan_pid]:
+            formatted = _format_message(reply, users, "  ", min_chars)
+            if formatted is None:
                 continue
-            group.extend(reply_lines)
+            group.extend(formatted)
             count += 1
         if group:
             orphan_section.append(
