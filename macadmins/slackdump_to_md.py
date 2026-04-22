@@ -192,15 +192,19 @@ def render_channel(
     #
     # slackdump stores thread parents with PARENT_ID set to their own
     # thread timestamp (see dbase/repository/dbmessage.go: NewDBMessage
-    # populates ParentID whenever msg.ThreadTimestamp != ""). So thread
-    # parents have PARENT_ID == ID, not NULL. "Top-level" really means
-    # "standalone post (no thread) OR thread parent", expressed as
-    # IS_PARENT = 1 OR PARENT_ID IS NULL. Replies are IS_PARENT = 0 with
-    # a matching PARENT_ID.
+    # populates ParentID whenever msg.ThreadTimestamp != ""). Two subtle
+    # shapes fall out of that:
     #
-    # For each top-level row (ordered by TS) we then pull its replies
-    # (also deduped) and write them immediately beneath. This keeps each
-    # conversation intact even when replies arrive days after the parent.
+    # - Normal thread parent (has replies): IS_PARENT = 1, PARENT_ID = ID.
+    # - Orphan thread lead (no replies yet, or replies deleted):
+    #   IS_PARENT = 0 (structures.IsThreadStart excludes empty threads),
+    #   PARENT_ID = ID, LATEST_REPLY = '0000000000.000000'.
+    #
+    # Both are "top-level" from a reading perspective. Expressing that as
+    # IS_PARENT = 1 OR PARENT_ID IS NULL would drop the orphan case, so
+    # the filter is "PARENT_ID IS NULL OR PARENT_ID = ID". Replies are
+    # any row whose PARENT_ID points at the lead but whose own ID is not
+    # the lead's (which excludes the parent's self-reference).
     top_level_sql = """
         SELECT m.ID, m.TS, m.IS_PARENT, m.PARENT_ID, m.THREAD_TS, m.TXT,
                json_extract(m.DATA, '$.user')     AS uid,
@@ -208,7 +212,7 @@ def render_channel(
                json_extract(m.DATA, '$.username') AS uname_override
         FROM MESSAGE m
         WHERE m.CHANNEL_ID = ?
-          AND (m.IS_PARENT = 1 OR m.PARENT_ID IS NULL)
+          AND (m.PARENT_ID IS NULL OR m.PARENT_ID = m.ID)
           AND m.CHUNK_ID = (
               SELECT MAX(m2.CHUNK_ID)
               FROM MESSAGE m2
@@ -224,7 +228,7 @@ def render_channel(
         FROM MESSAGE m
         WHERE m.CHANNEL_ID = ?
           AND m.PARENT_ID = ?
-          AND m.IS_PARENT = 0
+          AND m.ID != ?
           AND m.CHUNK_ID = (
               SELECT MAX(m2.CHUNK_ID)
               FROM MESSAGE m2
@@ -240,8 +244,12 @@ def render_channel(
         if parent_lines is not None:
             lines.extend(parent_lines)
             count += 1
-        if parent["IS_PARENT"]:
-            for reply in con.execute(replies_sql, (cid, parent["ID"])):
+        # Query replies whenever the row is a thread lead (PARENT_ID = ID),
+        # including orphan leads. For standalone posts (PARENT_ID IS NULL)
+        # there is nothing to look up and we skip the round trip.
+        if parent["PARENT_ID"] is not None:
+            pid = parent["ID"]
+            for reply in con.execute(replies_sql, (cid, pid, pid)):
                 reply_lines = _format_message(reply, users, "  ", min_chars)
                 if reply_lines is None:
                     continue
