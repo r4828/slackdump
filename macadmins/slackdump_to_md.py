@@ -149,6 +149,16 @@ def resolve_mentions(text: str, users: dict[str, str]) -> str:
     return text
 
 
+def _pid_to_iso(pid: int) -> str:
+    """Reverse fasttime.TS2int (dot-stripped int64) back to ISO-8601."""
+    s = str(pid)
+    if len(s) > 6:
+        ts = f"{s[:-6]}.{s[-6:]}"
+    else:
+        ts = f"0.{s.zfill(6)}"
+    return ts_to_iso(ts)
+
+
 def _format_message(
     row: sqlite3.Row,
     users: dict[str, str],
@@ -255,6 +265,42 @@ def render_channel(
                     continue
                 lines.extend(reply_lines)
                 count += 1
+
+    # Orphan replies: rows whose PARENT_ID points at a message that does
+    # not exist in this archive (deleted thread root, retention boundary,
+    # thread_broadcast without its root, etc.). Without this sweep they'd
+    # be silently dropped.
+    orphan_parents_sql = """
+        SELECT DISTINCT m.PARENT_ID AS pid
+        FROM MESSAGE m
+        WHERE m.CHANNEL_ID = ?
+          AND m.PARENT_ID IS NOT NULL
+          AND m.PARENT_ID != m.ID
+          AND NOT EXISTS (
+              SELECT 1 FROM MESSAGE p
+              WHERE p.CHANNEL_ID = m.CHANNEL_ID AND p.ID = m.PARENT_ID
+          )
+        ORDER BY m.PARENT_ID ASC
+    """
+    orphan_section: list[str] = []
+    for (orphan_pid,) in con.execute(orphan_parents_sql, (cid,)):
+        group: list[str] = []
+        for reply in con.execute(replies_sql, (cid, orphan_pid, orphan_pid)):
+            reply_lines = _format_message(reply, users, "  ", min_chars)
+            if reply_lines is None:
+                continue
+            group.extend(reply_lines)
+            count += 1
+        if group:
+            orphan_section.append(
+                f"- _parent message ({_pid_to_iso(orphan_pid)}) "
+                "is not in this archive_"
+            )
+            orphan_section.extend(group)
+    if orphan_section:
+        lines.append("## Orphan thread replies")
+        lines.append("")
+        lines.extend(orphan_section)
 
     safe_name = UNSAFE_FILENAME_RE.sub("_", cname) or "channel"
     (out_dir / f"{safe_name}.md").write_text(
