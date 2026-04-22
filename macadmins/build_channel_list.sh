@@ -24,15 +24,29 @@ missing_file="${here}/missing.txt"
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 command -v slackdump >/dev/null || { echo "slackdump is required on PATH" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "python3 is required (portable cache age check)" >&2; exit 1; }
 [[ -f "$names_file" ]] || { echo "Missing $names_file" >&2; exit 1; }
 
-# Refresh the channel cache once it's older than 24 hours.
-# -mmin +1440 : older than 1440 minutes; `-mtime +1` rounds to whole
-#               days and could keep a file fresh for up to ~48h.
-# -y          : auto-accept overwrite prompt (no TTY hang)
-# -q          : don't also spew the JSON to stdout
-if [[ ! -s "$cache" ]] || [[ -n "$(find "$cache" -mmin +1440 -print 2>/dev/null)" ]]; then
+# Refresh the channel cache if it's missing, empty, or older than 24
+# hours. Uses Python because `find -mmin` / `find -mtime` behave
+# differently across BSD (macOS) and GNU builds, and POSIX `find` does
+# not specify `-mmin` at all. Exit 0 = stale (re-fetch), 1 = fresh.
+cache_is_stale() {
+  python3 - "$1" <<'PY'
+import os, sys, time
+p = sys.argv[1]
+if not os.path.exists(p) or os.path.getsize(p) == 0:
+    sys.exit(0)
+if time.time() - os.path.getmtime(p) > 86400:
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+if cache_is_stale "$cache"; then
   echo "Fetching channel list from workspace '${workspace}' (this can take a minute)..." >&2
+  # -y : auto-accept overwrite prompt (no TTY hang)
+  # -q : don't also spew the JSON to stdout
   slackdump list channels -workspace "$workspace" -y -q -format JSON -o "$cache"
 fi
 
