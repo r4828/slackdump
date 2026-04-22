@@ -176,11 +176,17 @@ def render_channel(
     # exist in multiple chunks after resume / thread-fetch. Dedupe to the
     # latest chunk per (CHANNEL_ID, ID) so we don't emit duplicates.
     #
-    # Threads are grouped: we first pull top-level messages (thread parents
-    # and standalone posts) in timestamp order, then for each parent we pull
-    # its replies (also deduped) and write them immediately beneath. This
-    # keeps each conversation intact even when replies arrive days after the
-    # parent.
+    # slackdump stores thread parents with PARENT_ID set to their own
+    # thread timestamp (see dbase/repository/dbmessage.go: NewDBMessage
+    # populates ParentID whenever msg.ThreadTimestamp != ""). So thread
+    # parents have PARENT_ID == ID, not NULL. "Top-level" really means
+    # "standalone post (no thread) OR thread parent", expressed as
+    # IS_PARENT = 1 OR PARENT_ID IS NULL. Replies are IS_PARENT = 0 with
+    # a matching PARENT_ID.
+    #
+    # For each top-level row (ordered by TS) we then pull its replies
+    # (also deduped) and write them immediately beneath. This keeps each
+    # conversation intact even when replies arrive days after the parent.
     top_level_sql = """
         SELECT m.ID, m.TS, m.IS_PARENT, m.PARENT_ID, m.THREAD_TS, m.TXT,
                json_extract(m.DATA, '$.user')     AS uid,
@@ -188,7 +194,7 @@ def render_channel(
                json_extract(m.DATA, '$.username') AS uname_override
         FROM MESSAGE m
         WHERE m.CHANNEL_ID = ?
-          AND m.PARENT_ID IS NULL
+          AND (m.IS_PARENT = 1 OR m.PARENT_ID IS NULL)
           AND m.CHUNK_ID = (
               SELECT MAX(m2.CHUNK_ID)
               FROM MESSAGE m2
@@ -204,6 +210,7 @@ def render_channel(
         FROM MESSAGE m
         WHERE m.CHANNEL_ID = ?
           AND m.PARENT_ID = ?
+          AND m.IS_PARENT = 0
           AND m.CHUNK_ID = (
               SELECT MAX(m2.CHUNK_ID)
               FROM MESSAGE m2
