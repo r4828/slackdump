@@ -3,7 +3,7 @@ archive/
 md/
 
 # Generated working files
-channels_all.json
+channels_all.*.json
 channels.txt
 missing.txt
 

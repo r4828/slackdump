@@ -9,16 +9,19 @@
 #   3. SLACKDUMP_WORKSPACE env var OR pass workspace as first arg
 #
 # Output:
-#   channels_all.json  - full workspace channel listing (cached 24h)
-#   channels.txt       - URLs for every name that resolved, one per line
-#   missing.txt        - names that didn't match any channel (if any)
+#   channels_all.<workspace>.json  - full workspace channel listing (cached 24h)
+#   channels.txt                   - URLs for every name that resolved, one per line
+#   missing.txt                    - names that didn't match any channel (if any)
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workspace="${1:-${SLACKDUMP_WORKSPACE:-macadmins}}"
 names_file="${here}/channel_names.txt"
-cache="${here}/channels_all.json"
+# Scope the cache to the workspace so switching workspaces within the
+# 24-hour cache window doesn't reuse the previous catalog.
+safe_ws="${workspace//[^[:alnum:]._-]/_}"
+cache="${here}/channels_all.${safe_ws}.json"
 out="${here}/channels.txt"
 missing_file="${here}/missing.txt"
 
@@ -90,6 +93,12 @@ mv "$missing_tmp" "$missing_file"
 trap - EXIT
 
 echo "Resolved ${resolved} channel(s) -> $out" >&2
+if (( resolved == 0 )); then
+  echo "No channels resolved. Not running slackdump archive with an empty" >&2
+  echo "@channels.txt would risk a full-workspace scrape. Check" >&2
+  echo "channel_names.txt for typos or uncomment at least one entry." >&2
+  exit 1
+fi
 if (( missed > 0 )); then
   echo "Could not resolve ${missed} name(s). See ${missing_file}:" >&2
   sed 's/^/  - /' "$missing_file" >&2
