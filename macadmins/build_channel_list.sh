@@ -2,8 +2,15 @@
 # Resolve channel_names.txt -> channels.txt (a list of Slack archive URLs that
 # slackdump's archive command accepts as positional args).
 #
+# channel_names.txt accepts either:
+#   - a channel name (e.g. `jamf-pro`), which gets looked up in the
+#     cached workspace listing, or
+#   - a raw channel / group / DM ID (e.g. `C01234ABCDE`), which is
+#     passed through as-is. Useful when a name has multiple historical
+#     matches and the script refuses to pick one for you.
+#
 # Prereqs:
-#   1. jq on PATH
+#   1. jq and python3 on PATH
 #   2. slackdump workspace already authenticated for macadmins, e.g.:
 #        slackdump workspace new macadmins
 #   3. SLACKDUMP_WORKSPACE env var OR pass workspace as first arg
@@ -88,22 +95,52 @@ trap 'rm -f "$out_tmp" "$missing_tmp"' EXIT
 resolved=0
 missed=0
 
-while IFS= read -r raw; do
+# Slack channel / group / DM IDs. Slack forbids uppercase letters in
+# channel names, so a token matching this regex is unambiguously an ID
+# the user pasted directly (useful for disambiguating repeated names).
+id_regex='^[CGD][A-Z0-9]+$'
+
+# `|| [[ -n "$raw" ]]` so a file missing its terminating newline still
+# has its last line processed. `read` returns 1 on EOF but has already
+# populated $raw with the partial line.
+while IFS= read -r raw || [[ -n "$raw" ]]; do
   # strip inline comments and whitespace
   name="${raw%%#*}"
   name="${name//[[:space:]]/}"
   [[ -z "$name" ]] && continue
 
+  # Pass raw channel IDs through unchanged.
+  if [[ "$name" =~ $id_regex ]]; then
+    printf '# %s\n' "$name" >> "$out_tmp"
+    printf 'https://macadmins.slack.com/archives/%s\n' "$name" >> "$out_tmp"
+    resolved=$((resolved + 1))
+    continue
+  fi
+
   matches=$(jq -r --arg n "$name" '.[] | select(.name==$n) | .id' "$cache")
-  id=$(printf '%s\n' "$matches" | head -n1)
-  if [[ -z "$id" ]]; then
+  if [[ -z "$matches" ]]; then
     echo "$name" >> "$missing_tmp"
     missed=$((missed + 1))
     continue
   fi
-  if [[ $(printf '%s\n' "$matches" | grep -c .) -gt 1 ]]; then
-    echo "Warning: channel name '$name' matched multiple IDs; using $id" >&2
+  # `grep -c .` would exit 1 on no matches and trip `set -e`. By this
+  # point `$matches` is guaranteed non-empty, so wc -l is always safe.
+  match_count=$(printf '%s\n' "$matches" | wc -l)
+  if (( match_count > 1 )); then
+    # Refuse instead of guessing: picking head -n1 would depend on the
+    # API's list order. Emit each candidate so the user can copy a
+    # specific ID into channel_names.txt on the next run.
+    echo "Error: channel name '$name' matched ${match_count} IDs:" >&2
+    jq -r --arg n "$name" \
+      '.[] | select(.name==$n) |
+       "  \(.id)\(if .is_archived then " (archived)" else "" end)"' \
+      "$cache" >&2
+    echo "$name (ambiguous; paste the intended ID into channel_names.txt)" \
+      >> "$missing_tmp"
+    missed=$((missed + 1))
+    continue
   fi
+  id="$matches"
   # slackdump's @file reader only treats lines that START with '#' as
   # comments (internal/structures/entity_list.go:227). Emit the channel
   # name as a separate comment line above each URL so the file is
