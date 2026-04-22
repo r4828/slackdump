@@ -96,10 +96,10 @@ def load_users(con: sqlite3.Connection) -> dict[str, str]:
 def load_channels(
     con: sqlite3.Connection, wanted: list[str]
 ) -> list[tuple[str, str]]:
-    # Prefer the dedicated NAME column; fall back to the JSON payload so the
-    # script keeps working if a future slackdump version stops populating it
-    # or on SQLite builds without the JSON1 extension (json_extract is only
-    # used as a fallback inside Python).
+    # Prefer the dedicated NAME column; fall back to parsing the JSON payload
+    # in Python for this channel lookup if a future slackdump version stops
+    # populating NAME consistently. (The message queries below still rely on
+    # SQLite's JSON1 extension for uid/bot/username extraction.)
     rows = con.execute(
         """
         SELECT c.ID, c.NAME, c.DATA
@@ -150,16 +150,30 @@ def resolve_mentions(text: str, users: dict[str, str]) -> str:
 
 
 def _format_message(
-    row: sqlite3.Row, users: dict[str, str], indent: str
-) -> list[str]:
-    text = resolve_mentions((row["TXT"] or "").strip(), users)
+    row: sqlite3.Row,
+    users: dict[str, str],
+    indent: str,
+    min_chars: int,
+) -> list[str] | None:
+    """Render a message row as Markdown lines, or return None if filtered.
+
+    The length check runs against the rendered text (after mention / channel /
+    link rewriting) so --min-chars behaves predictably regardless of how
+    Slack's raw <@U…> / <#C…> tokens happen to compare in length.
+    """
+    raw = (row["TXT"] or "").strip()
+    if not raw:
+        return None
+    rendered = resolve_mentions(raw, users)
+    if len(rendered) < min_chars:
+        return None
     when = ts_to_iso(row["TS"])
     uid = row["uid"] or row["bot"] or ""
     who = users.get(uid) or row["uname_override"] or uid or "system"
-    text = text.replace("\n", f"\n{indent}  ")
+    body = rendered.replace("\n", f"\n{indent}  ")
     return [
         f"{indent}- **{who}** ({when})",
-        f"{indent}  {text}",
+        f"{indent}  {body}",
         "",
     ]
 
@@ -200,7 +214,7 @@ def render_channel(
               FROM MESSAGE m2
               WHERE m2.ID = m.ID AND m2.CHANNEL_ID = m.CHANNEL_ID
           )
-        ORDER BY CAST(m.TS AS REAL) ASC
+        ORDER BY m.ID ASC
     """
     replies_sql = """
         SELECT m.ID, m.TS, m.IS_PARENT, m.PARENT_ID, m.THREAD_TS, m.TXT,
@@ -216,24 +230,22 @@ def render_channel(
               FROM MESSAGE m2
               WHERE m2.ID = m.ID AND m2.CHANNEL_ID = m.CHANNEL_ID
           )
-        ORDER BY CAST(m.TS AS REAL) ASC
+        ORDER BY m.ID ASC
     """
 
     lines: list[str] = [f"# #{cname}", ""]
     count = 0
     for parent in con.execute(top_level_sql, (cid,)):
-        text = (parent["TXT"] or "").strip()
-        render_parent = bool(text) and len(text) >= min_chars
-        if render_parent:
-            lines.extend(_format_message(parent, users, ""))
+        parent_lines = _format_message(parent, users, "", min_chars)
+        if parent_lines is not None:
+            lines.extend(parent_lines)
             count += 1
         if parent["IS_PARENT"]:
-            reply_cur = con.execute(replies_sql, (cid, parent["ID"]))
-            for reply in reply_cur:
-                rtext = (reply["TXT"] or "").strip()
-                if not rtext or len(rtext) < min_chars:
+            for reply in con.execute(replies_sql, (cid, parent["ID"])):
+                reply_lines = _format_message(reply, users, "  ", min_chars)
+                if reply_lines is None:
                     continue
-                lines.extend(_format_message(reply, users, "  "))
+                lines.extend(reply_lines)
                 count += 1
 
     safe_name = UNSAFE_FILENAME_RE.sub("_", cname) or "channel"
