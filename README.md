@@ -79,6 +79,46 @@ On macOS, you can install Slackdump with Homebrew:
 brew install slackdump
 ```
 
+Then start the interactive wizard:
+
+```shell
+slackdump wiz
+```
+
+If macOS blocks the binary because it is from an unknown developer, see the
+note below for how to allow it in System Settings.
+
+If you prefer to run from source on macOS:
+
+```shell
+git clone https://github.com/rusq/slackdump.git
+cd slackdump
+go run ./cmd/slackdump wiz
+```
+
+Homebrew and source builds use the same default workspace credential/cache
+directory for your user account. So after switching to Homebrew, your existing
+authenticated workspace should be available automatically.
+
+To verify and reuse an existing setup:
+
+```shell
+slackdump workspace list
+```
+
+If your previous setup used a custom cache location, pass it explicitly:
+
+```shell
+slackdump --cache-dir /path/to/old/cache workspace list
+```
+
+or set environment variable:
+
+```shell
+export CACHE_DIR=/path/to/old/cache
+slackdump workspace list
+```
+
 On other Operating Systems, please follow these steps:
 
 1. Download the latest release for your operating system from the [releases] page.
