@@ -106,6 +106,25 @@ To verify and reuse an existing setup:
 slackdump workspace list
 ```
 
+If you see:
+
+```text
+ERROR 009 (User Error): no authenticated workspaces, please run "slackdump workspace new".
+```
+
+it means there are no saved credentials in the cache location Slackdump is
+currently using. Authenticate a workspace first:
+
+```shell
+slackdump workspace new <workspace-name-or-url>
+```
+
+or import an existing token/cookie file:
+
+```shell
+slackdump workspace import <path-to-.env-or-secrets.txt>
+```
+
 If your previous setup used a custom cache location, pass it explicitly:
 
 ```shell
@@ -316,6 +335,28 @@ cookie from the browser Slack session.  See [User's Guide][ug].
 #### I'm getting "invalid_auth" error
 
 Run `slackdump workspace new <name or url>` to reauthenticate.
+
+#### I'm getting `ERROR 009 ... no authenticated workspaces`
+
+This means Slackdump cannot find saved workspace credentials in the active
+cache directory.
+
+1. Check workspaces in the current cache:
+   ```shell
+   slackdump workspace list
+   ```
+2. If empty, authenticate:
+   ```shell
+   slackdump workspace new <workspace-name-or-url>
+   ```
+3. If credentials are in another path, point Slackdump to that cache:
+   ```shell
+   slackdump --cache-dir /path/to/old/cache workspace list
+   ```
+4. Or import from env/secrets file:
+   ```shell
+   slackdump workspace import <path-to-.env-or-secrets.txt>
+   ```
 
 #### How to read the export file?
 
