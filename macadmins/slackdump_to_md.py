@@ -345,7 +345,7 @@ def render_channel(
         lines.extend(orphan_section)
 
     (out_dir / f"{stem}.md").write_text(
-        "\n".join(lines), encoding="utf-8"
+        "\n".join(lines) + "\n", encoding="utf-8"
     )
     return count
 

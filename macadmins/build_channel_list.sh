@@ -95,9 +95,10 @@ trap 'rm -f "$out_tmp" "$missing_tmp"' EXIT
 resolved=0
 missed=0
 
-# Slack channel / group / DM IDs. Slack forbids uppercase letters in
-# channel names, so a token matching this regex is unambiguously an ID
-# the user pasted directly (useful for disambiguating repeated names).
+# Slack channel / group / DM IDs (`C...`, `G...`, or `D...`). Slack
+# forbids uppercase letters in channel names, so a token matching this
+# regex is unambiguously an ID the user pasted directly (useful for
+# disambiguating repeated names).
 id_regex='^[CGD][A-Z0-9]+$'
 
 # `|| [[ -n "${raw-}" ]]` so a file missing its terminating newline
