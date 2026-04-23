@@ -1,0 +1,12 @@
+# Archive output (regenerable, can be large)
+archive/
+md/
+
+# Generated working files
+channels_all.*.json
+channels.txt
+missing.txt
+
+# Python
+__pycache__/
+*.pyc

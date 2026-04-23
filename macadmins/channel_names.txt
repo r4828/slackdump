@@ -1,0 +1,26 @@
+# macadmins.slack.com channels to archive.
+# One channel name per line (no leading #). Lines starting with # are comments.
+# Channel IDs are resolved by build_channel_list.sh.
+
+# --- Jamf cluster ---
+jamf
+jamf-pro
+jamf-school
+jamf-api
+jamf-setup-manager
+
+# --- Apple / MDM ---
+apple-business
+nudge
+nudge-jamf
+
+# --- Packaging & scripting ---
+autopkg
+munki
+installomator
+bash
+python
+swiftdialog
+
+# --- Other tooling ---
+atlassian

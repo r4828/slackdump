@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "slackdump-macadmins": {
+      "command": "slackdump",
+      "args": ["mcp", "./archive/slackdump.sqlite"]
+    }
+  }
+}
