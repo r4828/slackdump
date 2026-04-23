@@ -86,15 +86,10 @@ slackdump wiz
 ```
 
 If macOS blocks the binary because it is from an unknown developer, see the
-note below for how to allow it in System Settings.
+note below for how to allow it in System Preferences -> Security and Privacy.
 
-If you prefer to run from source on macOS:
-
-```shell
-git clone https://github.com/rusq/slackdump.git
-cd slackdump
-go run ./cmd/slackdump wiz
-```
+If you prefer to run from source on macOS, see
+[Running Slackdump from a Repo Checkout](#running-slackdump-from-a-repo-checkout).
 
 Homebrew and source builds use the same default workspace credential/cache
 directory for your user account. So after switching to Homebrew, your existing
@@ -131,7 +126,7 @@ If your previous setup used a custom cache location, pass it explicitly:
 slackdump --cache-dir /path/to/old/cache workspace list
 ```
 
-or set environment variable:
+or set the CACHE_DIR environment variable:
 
 ```shell
 export CACHE_DIR=/path/to/old/cache
