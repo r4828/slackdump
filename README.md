@@ -79,6 +79,60 @@ On macOS, you can install Slackdump with Homebrew:
 brew install slackdump
 ```
 
+Then start the interactive wizard:
+
+```shell
+slackdump wiz
+```
+
+If macOS blocks the binary because it is from an unknown developer, see the
+note below for how to allow it in System Preferences -> Security and Privacy.
+
+If you prefer to run from source on macOS, see
+[Running Slackdump from a Repo Checkout](#running-slackdump-from-a-repo-checkout).
+
+Homebrew and source builds use the same default workspace credential/cache
+directory for your user account. So after switching to Homebrew, your existing
+authenticated workspace should be available automatically.
+
+To verify and reuse an existing setup:
+
+```shell
+slackdump workspace list
+```
+
+If you see:
+
+```text
+ERROR 009 (User Error): no authenticated workspaces, please run "slackdump workspace new".
+```
+
+it means there are no saved credentials in the cache location Slackdump is
+currently using. Authenticate a workspace first:
+
+```shell
+slackdump workspace new <workspace-name-or-url>
+```
+
+or import an existing token/cookie file:
+
+```shell
+slackdump workspace import <path-to-.env-or-secrets.txt>
+```
+
+If your previous setup used a custom cache location, pass it explicitly:
+
+```shell
+slackdump --cache-dir /path/to/old/cache workspace list
+```
+
+or set the CACHE_DIR environment variable:
+
+```shell
+export CACHE_DIR=/path/to/old/cache
+slackdump workspace list
+```
+
 On other Operating Systems, please follow these steps:
 
 1. Download the latest release for your operating system from the [releases] page.
@@ -276,6 +330,28 @@ cookie from the browser Slack session.  See [User's Guide][ug].
 #### I'm getting "invalid_auth" error
 
 Run `slackdump workspace new <name or url>` to reauthenticate.
+
+#### I'm getting `ERROR 009 ... no authenticated workspaces`
+
+This means Slackdump cannot find saved workspace credentials in the active
+cache directory.
+
+1. Check workspaces in the current cache:
+   ```shell
+   slackdump workspace list
+   ```
+2. If empty, authenticate:
+   ```shell
+   slackdump workspace new <workspace-name-or-url>
+   ```
+3. If credentials are in another path, point Slackdump to that cache:
+   ```shell
+   slackdump --cache-dir /path/to/old/cache workspace list
+   ```
+4. Or import from env/secrets file:
+   ```shell
+   slackdump workspace import <path-to-.env-or-secrets.txt>
+   ```
 
 #### How to read the export file?
 
